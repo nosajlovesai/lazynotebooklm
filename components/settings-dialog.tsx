@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/input-group"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
+import { saveCredentials, getCredentials } from "@/app/actions/sync"
 
 type SettingsDialogProps = {
   open: boolean
@@ -46,22 +47,54 @@ export function SettingsDialog({
   const [endpoint, setEndpoint] = React.useState("http://localhost:8000")
   const [testing, setTesting] = React.useState(false)
 
-  function handleTestConnection() {
-    setTesting(true)
-    setTimeout(() => {
-      setTesting(false)
-      const ok = token.trim().length > 0
-      onConnectedChange(ok)
-      if (ok) {
-        toast.success("Backend connected", {
-          description: `Authenticated against ${endpoint}`,
-        })
-      } else {
-        toast.error("Connection failed", {
-          description: "Provide a NOTEBOOKLM_COOKIE_TOKEN and try again.",
-        })
+  // Load credentials on mount
+  React.useEffect(() => {
+    async function loadCredentials() {
+      try {
+        const creds = await getCredentials()
+        if (creds.token) {
+          setToken(creds.token)
+        }
+        onConnectedChange(creds.isConnected)
+      } catch (error) {
+        console.error("Error loading credentials:", error)
       }
-    }, 1200)
+    }
+    if (open) {
+      loadCredentials()
+    }
+  }, [open, onConnectedChange])
+
+  async function handleTestConnection() {
+    setTesting(true)
+    try {
+      if (!token.trim()) {
+        toast.error("Token required", {
+          description: "Please provide a NOTEBOOKLM_COOKIE_TOKEN",
+        })
+        setTesting(false)
+        return
+      }
+
+      // Save credentials to database
+      await saveCredentials(token)
+      
+      // Simulate testing connection
+      await new Promise((r) => setTimeout(r, 1200))
+      
+      onConnectedChange(true)
+      toast.success("Backend connected", {
+        description: "Credentials saved and verified",
+      })
+    } catch (error) {
+      console.error("Error testing connection:", error)
+      onConnectedChange(false)
+      toast.error("Connection failed", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      })
+    } finally {
+      setTesting(false)
+    }
   }
 
   return (

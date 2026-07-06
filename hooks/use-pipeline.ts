@@ -1,12 +1,7 @@
 "use client"
 
 import * as React from "react"
-import {
-  buildLogScript,
-  PIPELINE_STEPS,
-  type LogEntry,
-  type StepStatus,
-} from "@/lib/pipeline"
+import { PIPELINE_STEPS, type LogEntry, type StepStatus } from "@/lib/pipeline"
 
 export type PipelineState = {
   running: boolean
@@ -15,6 +10,7 @@ export type PipelineState = {
   stepStatuses: StepStatus[]
   logs: LogEntry[]
   progress: number
+  syncId?: string
 }
 
 const IDLE_STATE: PipelineState = {
@@ -26,7 +22,7 @@ const IDLE_STATE: PipelineState = {
   progress: 0,
 }
 
-const LOG_INTERVAL_MS = 550
+const POLL_INTERVAL_MS = 1000
 
 export function usePipeline(onComplete?: (() => void) | null) {
   const [state, setState] = React.useState<PipelineState>(IDLE_STATE)
@@ -47,60 +43,117 @@ export function usePipeline(onComplete?: (() => void) | null) {
   }, [stop])
 
   const start = React.useCallback(
-    (url: string, depth: number) => {
+    async (url: string, depth: number, config?: any) => {
       stop()
-      const script = buildLogScript(url, depth)
-      const totalLogs = script.reduce((n, s) => n + s.length, 0)
-
-      let stepIndex = 0
-      let logIndex = 0
-      let emitted = 0
 
       setState({
         running: true,
         finished: false,
         currentStep: 0,
-        stepStatuses: PIPELINE_STEPS.map((_, i) =>
-          i === 0 ? "active" : "pending"
-        ),
+        stepStatuses: PIPELINE_STEPS.map((_, i) => (i === 0 ? "active" : "pending")),
         logs: [],
         progress: 0,
       })
 
-      timerRef.current = setInterval(() => {
-        const stepLogs = script[stepIndex]
-        const entry = stepLogs[logIndex]
-        emitted += 1
-        const isLastLogOfStep = logIndex === stepLogs.length - 1
-        const isLastStep = stepIndex === script.length - 1
-        const done = isLastLogOfStep && isLastStep
-
-        setState((prev) => {
-          const statuses = [...prev.stepStatuses]
-          if (isLastLogOfStep) {
-            statuses[stepIndex] = "completed"
-            if (!isLastStep) statuses[stepIndex + 1] = "active"
-          }
-          return {
-            running: !done,
-            finished: done,
-            currentStep: isLastLogOfStep && !isLastStep ? stepIndex + 1 : stepIndex,
-            stepStatuses: statuses,
-            logs: [...prev.logs, entry],
-            progress: Math.round((emitted / totalLogs) * 100),
-          }
+      try {
+        // Call the sync API
+        const response = await fetch("/api/sync/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, config: { crawlDepth: depth, ...config } }),
         })
 
-        if (done) {
-          stop()
-          onCompleteRef.current?.()
-        } else if (isLastLogOfStep) {
-          stepIndex += 1
-          logIndex = 0
-        } else {
-          logIndex += 1
+        if (!response.ok) {
+          throw new Error("Failed to start sync")
         }
-      }, LOG_INTERVAL_MS)
+
+        const syncData = await response.json()
+        const syncId = syncData.syncId
+
+        setState((prev) => ({ ...prev, syncId }))
+
+        // Poll for sync status
+        timerRef.current = setInterval(async () => {
+          try {
+            const statusResponse = await fetch(`/api/sync/status?syncId=${syncId}`)
+
+            if (!statusResponse.ok) {
+              throw new Error("Failed to get sync status")
+            }
+
+            const sync = await statusResponse.json()
+            const logs = (sync.logs || []) as any[]
+
+            setState((prev) => {
+              const statuses = [...prev.stepStatuses]
+
+              // Map progress to steps
+              if (sync.progress >= 100) {
+                statuses[0] = "completed"
+                statuses[1] = "completed"
+                statuses[2] = "completed"
+                statuses[3] = "completed"
+              } else if (sync.progress >= 80) {
+                statuses[0] = "completed"
+                statuses[1] = "completed"
+                statuses[2] = "completed"
+                statuses[3] = "active"
+              } else if (sync.progress >= 60) {
+                statuses[0] = "completed"
+                statuses[1] = "completed"
+                statuses[2] = "active"
+                statuses[3] = "pending"
+              } else if (sync.progress >= 40) {
+                statuses[0] = "completed"
+                statuses[1] = "active"
+                statuses[2] = "pending"
+                statuses[3] = "pending"
+              } else if (sync.progress >= 20) {
+                statuses[0] = "active"
+                statuses[1] = "pending"
+                statuses[2] = "pending"
+                statuses[3] = "pending"
+              }
+
+              return {
+                running: sync.progress < 100,
+                finished: sync.progress >= 100,
+                currentStep: Math.min(
+                  Math.floor((sync.progress / 25) * 4),
+                  PIPELINE_STEPS.length - 1
+                ),
+                stepStatuses: statuses,
+                logs,
+                progress: sync.progress,
+                syncId,
+              }
+            })
+
+            if (sync.progress >= 100) {
+              stop()
+              onCompleteRef.current?.()
+            }
+          } catch (error) {
+            console.error("Error polling sync status:", error)
+          }
+        }, POLL_INTERVAL_MS)
+      } catch (error) {
+        console.error("Error starting sync:", error)
+        setState((prev) => {
+          const errorLog: LogEntry = {
+            timestamp: new Date().toISOString(),
+            step: "error",
+            level: "error",
+            message: error instanceof Error ? error.message : "Unknown error",
+          }
+          return {
+            ...prev,
+            running: false,
+            finished: true,
+            logs: [...prev.logs, errorLog],
+          }
+        })
+      }
     },
     [stop]
   )

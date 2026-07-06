@@ -16,6 +16,7 @@ import {
   safeHost,
   type Notebook,
 } from "@/lib/pipeline"
+import { getNotebooks } from "@/app/actions/sync"
 
 export function Dashboard() {
   const [tab, setTab] = React.useState("pipeline")
@@ -27,21 +28,46 @@ export function Dashboard() {
     null
   )
 
+  // Load notebooks from database on mount
+  React.useEffect(() => {
+    async function loadNotebooks() {
+      try {
+        const dbNotebooks = await getNotebooks()
+        const mapped: Notebook[] = dbNotebooks.map((nb: any) => ({
+          id: nb.id.toString(),
+          title: nb.title,
+          domain: nb.url ? new URL(nb.url).hostname.replace("www.", "") : "unknown",
+          sources: { webpages: 1, pdfs: 0 },
+          lastSynced: nb.updatedAt ? new Date(nb.updatedAt).toLocaleDateString() : "Never",
+        }))
+        if (mapped.length > 0) {
+          setNotebooks(mapped)
+        }
+      } catch (error) {
+        console.error("Error loading notebooks:", error)
+      }
+    }
+    loadNotebooks()
+  }, [])
+
   const handleComplete = React.useCallback(() => {
     setActiveConfig((config) => {
       if (config) {
-        setNotebooks((prev) => [
-          {
-            id: `nb-${Date.now()}`,
-            title: config.notebookName,
-            domain: safeHost(config.url),
-            sources: { webpages: 1, pdfs: 12 },
-            lastSynced: "Just now",
-          },
-          ...prev,
-        ])
+        // Reload notebooks from database
+        getNotebooks()
+          .then((dbNotebooks) => {
+            const mapped: Notebook[] = dbNotebooks.map((nb: any) => ({
+              id: nb.id.toString(),
+              title: nb.title,
+              domain: nb.url ? new URL(nb.url).hostname.replace("www.", "") : "unknown",
+              sources: { webpages: 1, pdfs: 0 },
+              lastSynced: "Just now",
+            }))
+            setNotebooks(mapped)
+          })
+          .catch(console.error)
         toast.success("Notebook synced", {
-          description: `"${config.notebookName}" is now live with 13 sources.`,
+          description: `"${config.notebookName}" is now live!`,
         })
       }
       return config
@@ -53,7 +79,11 @@ export function Dashboard() {
   function handleStart(config: SyncConfig) {
     setActiveConfig(config)
     reset()
-    start(config.url, config.depth)
+    start(config.url, config.depth, {
+      extractPdfs: config.extractPdfs,
+      extractSubLinks: config.extractSubLinks,
+      scrapeMarkdown: config.scrapeMarkdown,
+    })
     toast.info("Smart Sync started", {
       description: `Crawling ${safeHost(config.url)} at depth ${config.depth}.`,
     })
