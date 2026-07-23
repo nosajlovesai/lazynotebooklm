@@ -75,149 +75,80 @@ export function SyncForm({ running, onStart }: SyncFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <div
-        className={cn(
-          "rounded-xl p-px transition-shadow",
-          "bg-border focus-within:bg-primary/50 focus-within:shadow-[0_0_32px_-8px] focus-within:shadow-primary/40"
-        )}
-      >
-        <InputGroup className="rounded-[calc(0.75rem-1px)] border-0 bg-card">
-          <InputGroupAddon>
-            <Globe aria-hidden="true" />
-          </InputGroupAddon>
-          <InputGroupInput
-            placeholder="Enter target URL, e.g., https://eecs70.org or Wikipedia..."
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            aria-label="Target URL"
-            className="h-12 text-sm"
-          />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton
-              type="submit"
-              variant="default"
-              size="sm"
-              disabled={!url.trim() || running}
-            >
-              <Sparkles data-icon="inline-start" />
-              {running ? "Syncing..." : "Start Smart Sync"}
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
+      <div className="flex gap-2">
+        <Input
+          placeholder="Paste URL (e.g. cs70.org)"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          className="flex-1"
+        />
+        <Button
+          type="submit"
+          disabled={!url.trim() || running}
+          size="sm"
+        >
+          {running ? "Syncing..." : "Sync"}
+        </Button>
       </div>
 
       <Collapsible open={configOpen} onOpenChange={setConfigOpen}>
-        <CollapsibleTrigger
-          render={
-            <button
-              type="button"
-              className="flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ChevronDown
-                className={cn(
-                  "size-3.5 transition-transform",
-                  configOpen && "rotate-180"
-                )}
-                aria-hidden="true"
+        <CollapsibleTrigger asChild>
+          <button className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
+            <ChevronDown className={cn("size-4 transition-transform", configOpen && "rotate-180")} />
+            Options
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-3 space-y-3 text-sm">
+          <Field>
+            <FieldLabel htmlFor="notebook-name">Name</FieldLabel>
+            <Input
+              id="notebook-name"
+              placeholder="Leave blank to auto-guess"
+              value={notebookName}
+              onChange={(e) => {
+                setNameTouched(true)
+                setNotebookName(e.target.value)
+              }}
+              size="sm"
+            />
+          </Field>
+
+          <div className="space-y-2">
+            <div className="text-xs font-medium">Crawl depth: {depth}</div>
+            <Slider
+              min={1}
+              max={5}
+              step={1}
+              value={[depth]}
+              onValueChange={(value) => setDepth(value[0])}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Field orientation="horizontal">
+              <Checkbox
+                id="extract-pdfs"
+                checked={extractPdfs}
+                onCheckedChange={(checked) => setExtractPdfs(checked === true)}
               />
-              Pipeline configuration
-              <span className="ml-auto font-mono text-[10px] tracking-wider text-muted-foreground/70">
-                DEPTH {depth} · {[extractPdfs, extractSubLinks, scrapeMarkdown].filter(Boolean).length}/3 FILTERS
-              </span>
-            </button>
-          }
-        />
-        <CollapsibleContent>
-          <div className="mt-3 rounded-xl border border-border bg-card/50 p-4 md:p-5">
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="notebook-name">
-                  Target Notebook Name
-                </FieldLabel>
-                <Input
-                  id="notebook-name"
-                  placeholder="Auto-guessed from URL domain"
-                  value={effectiveName}
-                  onChange={(e) => {
-                    setNameTouched(true)
-                    setNotebookName(e.target.value)
-                  }}
-                />
-                <FieldDescription>
-                  Defaults to a name guessed from the URL domain.
-                </FieldDescription>
-              </Field>
-
-              <FieldSet>
-                <FieldLegend variant="label">Extraction filters</FieldLegend>
-                <div className="flex flex-col gap-3 sm:flex-row sm:gap-6">
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="extract-pdfs"
-                      checked={extractPdfs}
-                      onCheckedChange={(checked) =>
-                        setExtractPdfs(checked === true)
-                      }
-                    />
-                    <FieldLabel htmlFor="extract-pdfs" className="font-normal">
-                      Extract PDFs
-                    </FieldLabel>
-                  </Field>
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="extract-sublinks"
-                      checked={extractSubLinks}
-                      onCheckedChange={(checked) =>
-                        setExtractSubLinks(checked === true)
-                      }
-                    />
-                    <FieldLabel
-                      htmlFor="extract-sublinks"
-                      className="font-normal"
-                    >
-                      Extract Sub-links
-                    </FieldLabel>
-                  </Field>
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="scrape-markdown"
-                      checked={scrapeMarkdown}
-                      onCheckedChange={(checked) =>
-                        setScrapeMarkdown(checked === true)
-                      }
-                    />
-                    <FieldLabel
-                      htmlFor="scrape-markdown"
-                      className="font-normal"
-                    >
-                      Scrape Main Markdown
-                    </FieldLabel>
-                  </Field>
-                </div>
-              </FieldSet>
-
-              <Field>
-                <div className="flex items-center justify-between">
-                  <FieldLabel htmlFor="crawl-depth">Crawl Depth</FieldLabel>
-                  <span className="font-mono text-xs text-primary">
-                    {depth} {depth === 1 ? "page" : "pages"}
-                  </span>
-                </div>
-                <Slider
-                  id="crawl-depth"
-                  min={1}
-                  max={5}
-                  step={1}
-                  value={depth}
-                  onValueChange={(value) =>
-                    setDepth(Array.isArray(value) ? value[0] : value)
-                  }
-                />
-                <FieldDescription>
-                  How many levels of sub-pages the crawler will follow.
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
+              <FieldLabel htmlFor="extract-pdfs" className="font-normal">PDFs</FieldLabel>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="extract-sublinks"
+                checked={extractSubLinks}
+                onCheckedChange={(checked) => setExtractSubLinks(checked === true)}
+              />
+              <FieldLabel htmlFor="extract-sublinks" className="font-normal">Sub-pages</FieldLabel>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                id="scrape-markdown"
+                checked={scrapeMarkdown}
+                onCheckedChange={(checked) => setScrapeMarkdown(checked === true)}
+              />
+              <FieldLabel htmlFor="scrape-markdown" className="font-normal">Page text</FieldLabel>
+            </Field>
           </div>
         </CollapsibleContent>
       </Collapsible>

@@ -82,26 +82,4 @@ export type Notebook = {
   lastSynced: string
 }
 
-export const INITIAL_NOTEBOOKS: Notebook[] = [
-  {
-    id: "nb-eecs70",
-    title: "EECS 70 Notes",
-    domain: "eecs70.org",
-    sources: { webpages: 1, pdfs: 13 },
-    lastSynced: "2 hours ago",
-  },
-  {
-    id: "nb-cs61a",
-    title: "CS 61A Archive",
-    domain: "cs61a.org",
-    sources: { webpages: 3, pdfs: 28 },
-    lastSynced: "Yesterday",
-  },
-  {
-    id: "nb-wiki-ml",
-    title: "ML Wikipedia Deep-Dive",
-    domain: "en.wikipedia.org",
-    sources: { webpages: 9, pdfs: 0 },
-    lastSynced: "3 days ago",
-  },
-]
+export const INITIAL_NOTEBOOKS: Notebook[] = []
