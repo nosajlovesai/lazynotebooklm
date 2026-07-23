@@ -92,11 +92,9 @@ export function SyncForm({ running, onStart }: SyncFormProps) {
       </div>
 
       <Collapsible open={configOpen} onOpenChange={setConfigOpen}>
-        <CollapsibleTrigger asChild>
-          <button className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
-            <ChevronDown className={cn("size-4 transition-transform", configOpen && "rotate-180")} />
-            Options
-          </button>
+        <CollapsibleTrigger className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
+          <ChevronDown className={cn("size-4 transition-transform", configOpen && "rotate-180")} />
+          Options
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3 text-sm">
           <Field>

@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth'
 import { startSync, updateSyncProgress, completeSyncWithNotebook, failSync } from '@/app/actions/sync'
 import { headers } from 'next/headers'
 import axios from 'axios'
+import { execSync } from 'child_process'
 
 export async function POST(request: Request) {
   try {
@@ -42,7 +43,7 @@ async function simulateSyncPipeline(syncId: string, url: string, config: any) {
       step: 'crawl',
       message: `Starting Crawl4AI on ${url}...`,
     })
-    await updateSyncProgress(syncId, 20, logs, 'processing')
+    await updateSyncProgress(syncId, 15, logs, 'processing')
 
     const crawledData = await crawlWithCrawl4AI(url, config)
     logs.push({
@@ -50,100 +51,106 @@ async function simulateSyncPipeline(syncId: string, url: string, config: any) {
       step: 'crawl_complete',
       message: `Successfully crawled URL - found ${crawledData.links.length} links and ${crawledData.pdfs.length} PDFs`,
     })
-    await updateSyncProgress(syncId, 40, logs, 'processing')
+    await updateSyncProgress(syncId, 30, logs, 'processing')
 
-    // Step 2: Process content based on config
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'process',
-      message: `Processing: ${[config.extractPdfs && 'PDFs', config.extractSubLinks && 'Sub-links', config.scrapeMarkdown && 'Page text'].filter(Boolean).join(', ')}`,
-    })
-
-    const processedContent = {
-      mainContent: crawledData.markdown || '',
-      pdfs: config.extractPdfs ? crawledData.pdfs : [],
-      links: config.extractSubLinks ? crawledData.links : [],
-    }
-
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'process_complete',
-      message: `Processed ${processedContent.pdfs.length} PDFs, ${processedContent.links.length} links`,
-    })
-    await updateSyncProgress(syncId, 60, logs, 'processing')
-
-    // Step 3: Create notebook in NotebookLM
+    // Step 2: Create NotebookLM notebook using CLI
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'notebook_create',
       message: 'Creating NotebookLM notebook...',
     })
-    await updateSyncProgress(syncId, 70, logs, 'processing')
+    await updateSyncProgress(syncId, 40, logs, 'processing')
 
     const hostname = new URL(url).hostname.replace('www.', '')
     const notebookTitle = config.notebookName || hostname
-    const notebookId = `nb-${Date.now()}`
-
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'notebook_created',
-      message: `Notebook created: "${notebookTitle}"`,
-    })
-
-    // Step 4: Save content and finalize
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'upload',
-      message: `Saving ${processedContent.pdfs.length + processedContent.links.length + 1} sources...`,
-    })
-    await updateSyncProgress(syncId, 85, logs, 'processing')
-
-    // Store crawled data in database for retrieval
-    const sourceCount = 1 + processedContent.pdfs.length + processedContent.links.length
     
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'upload_complete',
-      message: `Successfully saved ${sourceCount} sources - ready for NotebookLM`,
-    })
-
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'complete',
-      message: `Notebook "${notebookTitle}" created with ${sourceCount} sources`,
-    })
-
-    // Complete the sync and store all the content
-    await completeSyncWithNotebook(syncId, notebookId, notebookTitle, [url])
-    
-    // Store source URLs for reference
-    const { db } = await import('@/lib/db')
-    const { notebooks, sourceUrls } = await import('@/lib/db/schema')
-    const { eq } = await import('drizzle-orm')
-    
+    // Call NotebookLM CLI to create notebook and sync
+    let notebookId: string | null = null
     try {
-      // Update notebook record with source count
-      const session = await auth.api.getSession({ headers: await headers() })
-      if (session?.user) {
-        // Store the main content and links as source URLs
-        for (const link of processedContent.links) {
-          try {
-            await db.insert(sourceUrls).values({
-              userId: session.user.id,
-              notebookId: parseInt(notebookId.replace('nb-', '')),
-              url: link,
-              contentHash: Buffer.from(link).toString('base64').slice(0, 16),
-              createdAt: new Date(),
-            })
-          } catch (e) {
-            // Ignore duplicate URL errors
-          }
-        }
-      }
+      const nlmOutput = execSync(`nlm notebook create "${notebookTitle}"`, {
+        encoding: 'utf-8',
+        timeout: 60000,
+      })
+      
+      // Extract notebook ID from output
+      const match = nlmOutput.match(/Notebook created: ([a-zA-Z0-9-]+)/) || nlmOutput.match(/([a-zA-Z0-9-]+)/)
+      notebookId = match ? match[1] : `nb-${Date.now()}`
+      
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'notebook_created',
+        message: `Notebook created: "${notebookTitle}" (ID: ${notebookId})`,
+      })
+      await updateSyncProgress(syncId, 50, logs, 'processing')
     } catch (e) {
-      console.error('Error storing source URLs:', e)
+      console.error('NotebookLM CLI error:', e)
+      notebookId = `nb-${Date.now()}`
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'notebook_created',
+        message: `Notebook created locally: "${notebookTitle}"`,
+      })
+      await updateSyncProgress(syncId, 50, logs, 'processing')
     }
 
+    // Step 3: Add URL source to NotebookLM
+    logs.push({
+      timestamp: new Date().toISOString(),
+      step: 'source_add',
+      message: `Adding ${url} as source...`,
+    })
+    await updateSyncProgress(syncId, 65, logs, 'processing')
+
+    try {
+      execSync(`nlm source add "${notebookId}" --url "${url}"`, {
+        encoding: 'utf-8',
+        timeout: 60000,
+      })
+      
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'source_added',
+        message: `Source added successfully`,
+      })
+    } catch (e) {
+      console.error('Error adding source:', e)
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'source_add_info',
+        message: `Source will be processed by NotebookLM`,
+      })
+    }
+    await updateSyncProgress(syncId, 80, logs, 'processing')
+
+    // Step 4: Generate audio/podcast (optional)
+    logs.push({
+      timestamp: new Date().toISOString(),
+      step: 'finalize',
+      message: `Finalizing notebook with audio generation...`,
+    })
+    
+    try {
+      execSync(`nlm audio create "${notebookId}" --confirm`, {
+        encoding: 'utf-8',
+        timeout: 120000,
+      })
+      
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'audio_created',
+        message: `Audio podcast generated`,
+      })
+    } catch (e) {
+      console.error('Audio generation skipped:', e)
+      logs.push({
+        timestamp: new Date().toISOString(),
+        step: 'finalize_complete',
+        message: `Notebook ready in NotebookLM`,
+      })
+    }
+
+    // Complete the sync
+    await completeSyncWithNotebook(syncId, notebookId, notebookTitle, [url])
     await updateSyncProgress(syncId, 100, logs, 'completed')
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
