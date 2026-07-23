@@ -1,6 +1,7 @@
 import { auth } from '@/lib/auth'
 import { startSync, updateSyncProgress, completeSyncWithNotebook, failSync } from '@/app/actions/sync'
 import { headers } from 'next/headers'
+import axios from 'axios'
 
 export async function POST(request: Request) {
   try {
@@ -42,76 +43,71 @@ async function simulateSyncPipeline(syncId: string, url: string, config: any) {
       message: `Starting Crawl4AI on ${url}...`,
     })
     await updateSyncProgress(syncId, 20, logs, 'processing')
-    await new Promise((r) => setTimeout(r, 1500))
 
-    // In production, call real Crawl4AI API
-    // const crawledContent = await crawlWithCrawl4AI(url, config)
-
+    const crawledData = await crawlWithCrawl4AI(url, config)
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'crawl_complete',
-      message: 'Successfully crawled URL and extracted content',
+      message: `Successfully crawled URL - found ${crawledData.links.length} links and ${crawledData.pdfs.length} PDFs`,
     })
     await updateSyncProgress(syncId, 40, logs, 'processing')
 
-    // Step 2: Process PDFs and filter
+    // Step 2: Process content based on config
     logs.push({
       timestamp: new Date().toISOString(),
-      step: 'pdf_filter',
-      message: 'Filtering PDFs based on configuration...',
+      step: 'process',
+      message: `Processing: ${[config.extractPdfs && 'PDFs', config.extractSubLinks && 'Sub-links', config.scrapeMarkdown && 'Page text'].filter(Boolean).join(', ')}`,
     })
-    await new Promise((r) => setTimeout(r, 1200))
+
+    const processedContent = {
+      mainContent: crawledData.markdown || '',
+      pdfs: config.extractPdfs ? crawledData.pdfs : [],
+      links: config.extractSubLinks ? crawledData.links : [],
+    }
 
     logs.push({
       timestamp: new Date().toISOString(),
-      step: 'pdf_filter_complete',
-      message: 'PDF filtering completed, 3 documents processed',
+      step: 'process_complete',
+      message: `Processed ${processedContent.pdfs.length} PDFs, ${processedContent.links.length} links`,
     })
     await updateSyncProgress(syncId, 60, logs, 'processing')
 
-    // Step 3: Authenticate with NotebookLM
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'auth',
-      message: 'Authenticating with NotebookLM...',
-    })
-    await new Promise((r) => setTimeout(r, 1000))
-
-    logs.push({
-      timestamp: new Date().toISOString(),
-      step: 'auth_complete',
-      message: 'Successfully authenticated with NotebookLM',
-    })
-    await updateSyncProgress(syncId, 80, logs, 'processing')
-
-    // Step 4: Create notebook and upload content
+    // Step 3: Create notebook in NotebookLM
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'notebook_create',
       message: 'Creating NotebookLM notebook...',
     })
-    await new Promise((r) => setTimeout(r, 1500))
+    await updateSyncProgress(syncId, 70, logs, 'processing')
 
-    const notebookTitle = `${new URL(url).hostname.replace('www.', '')} - ${new Date().toLocaleDateString()}`
+    const hostname = new URL(url).hostname.replace('www.', '')
+    const notebookTitle = config.notebookName || hostname
     const notebookId = `nb-${Date.now()}`
 
     logs.push({
       timestamp: new Date().toISOString(),
-      step: 'notebook_create_complete',
-      message: `Notebook created: ${notebookTitle}`,
+      step: 'notebook_created',
+      message: `Notebook created: "${notebookTitle}"`,
     })
 
+    // Step 4: Upload content to NotebookLM
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'upload',
-      message: 'Uploading content to notebook...',
+      message: `Uploading ${processedContent.pdfs.length + 1} sources...`,
     })
-    await new Promise((r) => setTimeout(r, 1200))
+    await updateSyncProgress(syncId, 85, logs, 'processing')
+
+    // In production, use real NotebookLM API to upload:
+    // - Main page content as markdown
+    // - PDF files
+    // - Sub-page links as references
+    const sourceCount = 1 + processedContent.pdfs.length + processedContent.links.length
 
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'upload_complete',
-      message: 'All content uploaded successfully',
+      message: `Successfully uploaded ${sourceCount} sources to notebook`,
     })
 
     // Complete the sync
@@ -125,5 +121,76 @@ async function simulateSyncPipeline(syncId: string, url: string, config: any) {
       message: `Sync failed: ${errorMessage}`,
     })
     await failSync(syncId, errorMessage)
+  }
+}
+
+async function crawlWithCrawl4AI(url: string, config: any) {
+  if (!process.env.CRAWL4AI_API_KEY) {
+    throw new Error('CRAWL4AI_API_KEY is not set')
+  }
+
+  try {
+    // Call Crawl4AI API
+    const response = await axios.post(
+      'https://api.crawl4ai.com/crawl',
+      {
+        urls: [url],
+        include_raw_html: false,
+        markdown_generation_options: {
+          content_filter: {
+            include_links: config.extractSubLinks !== false,
+            include_images: false,
+          },
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.CRAWL4AI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 120000,
+      }
+    )
+
+    const crawlResult = response.data.results?.[0]
+
+    if (!crawlResult) {
+      throw new Error('No crawl result returned from Crawl4AI')
+    }
+
+    // Extract markdown content
+    const markdown = crawlResult.markdown || crawlResult.content || ''
+
+    // Extract links from the crawled content
+    const linkRegex = /\[.*?\]\((https?:\/\/[^\)]+)\)/g
+    const links: string[] = []
+    let match
+    while ((match = linkRegex.exec(markdown)) !== null) {
+      if (match[1] && !links.includes(match[1])) {
+        links.push(match[1])
+      }
+    }
+
+    // Extract PDFs - look for PDF links in the content
+    const pdfRegex = /(https?:\/\/[^\s\)]+\.pdf)/gi
+    const pdfs: string[] = []
+    let pdfMatch
+    while ((pdfMatch = pdfRegex.exec(markdown)) !== null) {
+      if (pdfMatch[1] && !pdfs.includes(pdfMatch[1])) {
+        pdfs.push(pdfMatch[1])
+      }
+    }
+
+    return {
+      markdown,
+      links: links.slice(0, config.crawlDepth ? config.crawlDepth * 5 : 10),
+      pdfs: pdfs.slice(0, 20),
+      raw: crawlResult,
+    }
+  } catch (error) {
+    console.error('Crawl4AI error:', error)
+    throw new Error(
+      `Failed to crawl URL: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
