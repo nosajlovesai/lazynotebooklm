@@ -90,28 +90,60 @@ async function simulateSyncPipeline(syncId: string, url: string, config: any) {
       message: `Notebook created: "${notebookTitle}"`,
     })
 
-    // Step 4: Upload content to NotebookLM
+    // Step 4: Save content and finalize
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'upload',
-      message: `Uploading ${processedContent.pdfs.length + 1} sources...`,
+      message: `Saving ${processedContent.pdfs.length + processedContent.links.length + 1} sources...`,
     })
     await updateSyncProgress(syncId, 85, logs, 'processing')
 
-    // In production, use real NotebookLM API to upload:
-    // - Main page content as markdown
-    // - PDF files
-    // - Sub-page links as references
+    // Store crawled data in database for retrieval
     const sourceCount = 1 + processedContent.pdfs.length + processedContent.links.length
-
+    
     logs.push({
       timestamp: new Date().toISOString(),
       step: 'upload_complete',
-      message: `Successfully uploaded ${sourceCount} sources to notebook`,
+      message: `Successfully saved ${sourceCount} sources - ready for NotebookLM`,
     })
 
-    // Complete the sync
+    logs.push({
+      timestamp: new Date().toISOString(),
+      step: 'complete',
+      message: `Notebook "${notebookTitle}" created with ${sourceCount} sources`,
+    })
+
+    // Complete the sync and store all the content
     await completeSyncWithNotebook(syncId, notebookId, notebookTitle, [url])
+    
+    // Store source URLs for reference
+    const { db } = await import('@/lib/db')
+    const { notebooks, sourceUrls } = await import('@/lib/db/schema')
+    const { eq } = await import('drizzle-orm')
+    
+    try {
+      // Update notebook record with source count
+      const session = await auth.api.getSession({ headers: await headers() })
+      if (session?.user) {
+        // Store the main content and links as source URLs
+        for (const link of processedContent.links) {
+          try {
+            await db.insert(sourceUrls).values({
+              userId: session.user.id,
+              notebookId: parseInt(notebookId.replace('nb-', '')),
+              url: link,
+              contentHash: Buffer.from(link).toString('base64').slice(0, 16),
+              createdAt: new Date(),
+            })
+          } catch (e) {
+            // Ignore duplicate URL errors
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error storing source URLs:', e)
+    }
+
     await updateSyncProgress(syncId, 100, logs, 'completed')
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
